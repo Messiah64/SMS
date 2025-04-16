@@ -10,7 +10,8 @@ from datetime import datetime
 st.set_page_config(
     page_title="SCDF Turnout Deployment",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed",
+    theme="light"
 )
 
 # Retrieve Supabase credentials from Streamlit secrets
