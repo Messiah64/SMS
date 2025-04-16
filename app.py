@@ -25,202 +25,89 @@ def init_supabase():
         st.error(f"Failed to connect to Supabase: {e}")
         return None
 
-# Save deployment to Supabase - Updated to update instead of create new
-def save_deployment_to_supabase():
-    """Update the current deployment in Supabase"""
+# Simple function to load all current positions
+def load_positions():
+    """Load all positions from the database"""
     supabase = init_supabase()
     if not supabase:
-        return False
+        return {}
     
     try:
-        current_time = datetime.now().isoformat()
-        
-        # Get current deployment ID
-        response = supabase.table('current_deployment').select('id').execute()
-        if not response.data:
-            # Create a new deployment if none exists
-            deployment_id = str(uuid.uuid4())
-            supabase.table('current_deployment').insert({
-                'id': deployment_id,
-                'last_updated': current_time
-            }).execute()
-        else:
-            deployment_id = response.data[0]['id']
-            # Update last_updated timestamp
-            supabase.table('current_deployment')\
-                .update({'last_updated': current_time})\
-                .eq('id', deployment_id)\
-                .execute()
-        
-        # For each position in the current deployment form
-        for vehicle, positions in st.session_state.deployment.items():
-            for position, name in positions.items():
-                if name:  # Only process filled positions
-                    # Check if this position already exists
-                    position_response = supabase.table('assignments')\
-                        .select('id')\
-                        .eq('vehicle_code', vehicle)\
-                        .eq('position_code', position)\
-                        .execute()
-                    
-                    if position_response.data:
-                        # Update existing assignment
-                        assignment_id = position_response.data[0]['id']
-                        supabase.table('assignments')\
-                            .update({
-                                'personnel_name': name,
-                                'updated_at': current_time
-                            })\
-                            .eq('id', assignment_id)\
-                            .execute()
-                    else:
-                        # Create new assignment
-                        supabase.table('assignments')\
-                            .insert({
-                                'id': str(uuid.uuid4()),
-                                'vehicle_code': vehicle,
-                                'position_code': position,
-                                'personnel_name': name,
-                                'created_at': current_time,
-                                'updated_at': current_time
-                            })\
-                            .execute()
-                else:
-                    # If position is empty, delete any existing assignment
-                    supabase.table('assignments')\
-                        .delete()\
-                        .eq('vehicle_code', vehicle)\
-                        .eq('position_code', position)\
-                        .execute()
-        
-        return True
-    
-    except Exception as e:
-        st.error(f"Error saving to Supabase: {e}")
-        return False
-
-# Get current deployment from Supabase
-def get_current_deployment_from_supabase():
-    """Fetch the current deployment from Supabase"""
-    supabase = init_supabase()
-    if not supabase:
-        return None, []
-    
-    try:
-        # Get current deployment ID
-        deployment_response = supabase.table('current_deployment').select('*').execute()
-        
-        if not deployment_response.data:
-            return None, []
-        
-        current_deployment = deployment_response.data[0]
-        
-        # Get all assignments
-        assignments_response = supabase.table('assignments').select('*').execute()
-        
-        return current_deployment, assignments_response.data
-    
-    except Exception as e:
-        st.error(f"Error fetching from Supabase: {e}")
-        return None, []
-
-# Load deployment from Supabase to session state
-def load_deployment_from_supabase():
-    """Load current deployment from Supabase into session state"""
-    supabase = init_supabase()
-    if not supabase:
-        return False
-    
-    try:
-        # Reset current deployment in session state
-        for vehicle in st.session_state.deployment:
-            for position in st.session_state.deployment[vehicle]:
-                st.session_state.deployment[vehicle][position] = ""
-        
-        # Get all assignments
         response = supabase.table('assignments').select('*').execute()
         
-        if not response.data:
-            return False
-        
-        # Update session state with assignments
-        for assignment in response.data:
-            vehicle = assignment['vehicle_code']
-            position = assignment['position_code']
-            name = assignment['personnel_name']
+        positions = {}
+        for item in response.data:
+            vehicle = item['vehicle_code']
+            position = item['position_code']
+            name = item['personnel_name']
             
-            if vehicle in st.session_state.deployment and position in st.session_state.deployment[vehicle]:
-                st.session_state.deployment[vehicle][position] = name
-                # Update widget state if exists
-                widget_key = f"{vehicle}_{position}"
-                if widget_key in st.session_state:
-                    st.session_state[widget_key] = name
+            if vehicle not in positions:
+                positions[vehicle] = {}
+            
+            positions[vehicle][position] = name
         
-        return True
-    
+        return positions
     except Exception as e:
-        st.error(f"Error loading deployment from Supabase: {e}")
-        return False
+        st.error(f"Error loading data: {e}")
+        return {}
 
-# Get personnel roster from Supabase
-def get_personnel_roster():
-    """Get list of all personnel from Supabase"""
+# Simple function to save a single position
+def update_position(vehicle, position, name):
+    """Update a single position in the database"""
     supabase = init_supabase()
     if not supabase:
-        return []
+        return False
     
     try:
-        response = supabase.table('personnel').select('*').order('name').execute()
+        # Check if position exists
+        response = supabase.table('assignments')\
+            .select('id')\
+            .eq('vehicle_code', vehicle)\
+            .eq('position_code', position)\
+            .execute()
         
-        # Format for selectbox - name only
-        return [""] + [person['name'] for person in response.data]
-    
+        if response.data:
+            # Position exists, update or delete
+            if name:
+                # Update existing position
+                supabase.table('assignments')\
+                    .update({'personnel_name': name})\
+                    .eq('vehicle_code', vehicle)\
+                    .eq('position_code', position)\
+                    .execute()
+            else:
+                # Delete position if name is empty
+                supabase.table('assignments')\
+                    .delete()\
+                    .eq('vehicle_code', vehicle)\
+                    .eq('position_code', position)\
+                    .execute()
+        elif name:
+            # Position doesn't exist and we have a name, create it
+            supabase.table('assignments')\
+                .insert({
+                    'id': str(uuid.uuid4()),
+                    'vehicle_code': vehicle,
+                    'position_code': position,
+                    'personnel_name': name
+                })\
+                .execute()
+        
+        return True
     except Exception as e:
-        st.error(f"Error fetching personnel from Supabase: {e}")
-        return []
+        st.error(f"Error updating position: {e}")
+        return False
 
 # Initialize session state variables
 if 'page' not in st.session_state:
     st.session_state.page = 'home'  # Default to home page
 
-if 'deployment' not in st.session_state:
-    st.session_state.deployment = {
-        'PL181': {
-            'RC': '',
-            'DRC': '',
-            'PO': '',
-            'SC': '',
-            'FF1': '',
-            'FF2': '',
-            'FF3': ''
-        },
-        'LF181E': {
-            'PO': '',
-            'SC': '',
-            'FF1': '',
-            'FF2': ''
-        },
-        'CPL181E': {
-            'PO': '',
-            'SC': '',
-            'FF1': '',
-            'FF2': '',
-            'FF3': '',
-            'FF4': ''
-        },
-        'A181D': {
-            'PRM': '',
-            'EMTD': '',
-            'EMT1': '',
-            'EMT2': ''
-        },
-        'A182D': {
-            'PRM': '',
-            'EMTD': '',
-            'EMT1': '',
-            'EMT2': ''
-        }
-    }
+if 'positions' not in st.session_state:
+    # Load positions from database on first load
+    st.session_state.positions = load_positions()
+
+if 'is_changed' not in st.session_state:
+    st.session_state.is_changed = False
 
 # Custom CSS
 st.markdown("""
@@ -254,20 +141,6 @@ st.markdown("""
     }
     .footer-buttons {
         padding-top: 20px;
-    }
-    .card {
-        padding: 15px;
-        border-radius: 5px;
-        background-color: #f9f9f9;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        margin-bottom: 15px;
-    }
-    .vehicle-header {
-        background-color: #e6f3ff;
-        padding: 10px;
-        margin-bottom: 10px;
-        border-radius: 5px;
-        font-weight: bold;
     }
     .position-row {
         display: flex;
@@ -303,25 +176,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Try to get personnel from database, fall back to sample list if not available
-try:
-    sample_names = get_personnel_roster()
-    if not sample_names or len(sample_names) <= 1:  # If only empty option or error
-        # Sample data for demonstration
-        sample_names = [
-            "", "LTA SHABIR", "WO2 AMIN", "SGT MUZAMIL", "SGT SULTAN", "CPL PUTRA", 
-            "LCP BU XIANG XUAN", "LCP QUINN", "SGT RAIHAN", "LCP HAROUN", "SGT FAUZI", 
-            "SGT ADLY", "LCP NATHAN", "ORNS 1", "ORNS 2", "WO2 AZHAR", "SGT3 ZHUBRAN", 
-            "SSG AHMAD", "WO2 ZULHAINI", "LCP KHAMBHATI", "LCP CHINMAY"
-        ]
-except:
-    # Fallback sample data
-    sample_names = [
-        "", "LTA SHABIR", "WO2 AMIN", "SGT MUZAMIL", "SGT SULTAN", "CPL PUTRA", 
-        "LCP BU XIANG XUAN", "LCP QUINN", "SGT RAIHAN", "LCP HAROUN", "SGT FAUZI", 
-        "SGT ADLY", "LCP NATHAN", "ORNS 1", "ORNS 2", "WO2 AZHAR", "SGT3 ZHUBRAN", 
-        "SSG AHMAD", "WO2 ZULHAINI", "LCP KHAMBHATI", "LCP CHINMAY"
-    ]
+# Sample names
+sample_names = [
+    "", "LTA SHABIR", "WO2 AMIN", "SGT MUZAMIL", "SGT SULTAN", "CPL PUTRA", 
+    "LCP BU XIANG XUAN", "LCP QUINN", "SGT RAIHAN", "LCP HAROUN", "SGT FAUZI", 
+    "SGT ADLY", "LCP NATHAN", "ORNS 1", "ORNS 2", "WO2 AZHAR", "SGT3 ZHUBRAN", 
+    "SSG AHMAD", "WO2 ZULHAINI", "LCP KHAMBHATI", "LCP CHINMAY"
+]
 
 # Role descriptions (full names)
 role_descriptions = {
@@ -347,96 +208,81 @@ def generate_csv(data):
     buffer.seek(0)
     return buffer
 
+# Function to get position value with fallback
+def get_position_value(vehicle, position):
+    """Get value for a position with fallback to empty string"""
+    if vehicle in st.session_state.positions and position in st.session_state.positions[vehicle]:
+        return st.session_state.positions[vehicle][position]
+    return ""
+
+# Function to track selection changes
+def on_select_change(vehicle, position):
+    """Callback for when a selection changes"""
+    # Get the new value from session state
+    key = f"{vehicle}_{position}"
+    new_value = st.session_state[key]
+    
+    # Update our positions dictionary
+    if vehicle not in st.session_state.positions:
+        st.session_state.positions[vehicle] = {}
+    
+    # Only mark as changed if value is actually different
+    old_value = st.session_state.positions[vehicle].get(position, "")
+    if new_value != old_value:
+        st.session_state.is_changed = True
+        st.session_state.positions[vehicle][position] = new_value
+
 # Function to clear form
 def clear_form():
-    for key in st.session_state:
-        if key.startswith(('PL181_', 'LF181E_', 'CPL181E_', 'A181D_', 'A182D_')):
-            st.session_state[key] = ""
+    for vehicle in ['PL181', 'LF181E', 'CPL181E', 'A181D', 'A182D']:
+        if vehicle not in st.session_state.positions:
+            st.session_state.positions[vehicle] = {}
+            
+        for position in get_positions_for_vehicle(vehicle):
+            # Clear in our positions dictionary
+            if position in st.session_state.positions[vehicle]:
+                st.session_state.positions[vehicle][position] = ""
+            
+            # Clear in widget state
+            key = f"{vehicle}_{position}"
+            if key in st.session_state:
+                st.session_state[key] = ""
     
-    # Also clear the deployment dictionary
-    for vehicle in st.session_state.deployment:
-        for position in st.session_state.deployment[vehicle]:
-            st.session_state.deployment[vehicle][position] = ""
+    st.session_state.is_changed = True
+
+# Helper function to get positions for a vehicle
+def get_positions_for_vehicle(vehicle):
+    """Return list of positions for a vehicle"""
+    if vehicle == 'PL181':
+        return ['RC', 'DRC', 'PO', 'SC', 'FF1', 'FF2', 'FF3']
+    elif vehicle == 'LF181E':
+        return ['PO', 'SC', 'FF1', 'FF2']
+    elif vehicle == 'CPL181E':
+        return ['PO', 'SC', 'FF1', 'FF2', 'FF3', 'FF4']
+    elif vehicle in ['A181D', 'A182D']:
+        return ['PRM', 'EMTD', 'EMT1', 'EMT2']
+    return []
 
 # Navigation buttons
 def navigation():
     col1, col2, col3 = st.columns([1, 4, 1])
     with col1:
         if st.button("📊 Summary View", key="nav_summary"):
+            # Check if we need to save changes before navigating
+            if st.session_state.is_changed:
+                # Reload positions before showing summary
+                st.session_state.positions = load_positions()
+                st.session_state.is_changed = False
+            
             st.session_state.page = 'home'
             st.rerun()
     with col3:
         if st.button("✏️ Edit Deployment", key="nav_edit"):
-            # Load current deployment when entering edit page
-            load_deployment_from_supabase()
+            # Reload positions when going to edit page
+            st.session_state.positions = load_positions()
+            st.session_state.is_changed = False
             st.session_state.page = 'edit'
             st.rerun()
-
-# Home page with summary view
-def home_page():
-    st.markdown('<div class="main-header">SCDF TURNOUT DEPLOYMENT</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Summary View</div>', unsafe_allow_html=True)
-    
-    # Navigation
-    navigation()
-    
-    # Get current deployment from Supabase
-    current_deployment, assignments = get_current_deployment_from_supabase()
-    
-    if not current_deployment:
-        st.markdown(
-            '<div class="notification error">No deployment data found. Create a new deployment using the Edit button.</div>',
-            unsafe_allow_html=True
-        )
-        return
-    
-    # Show deployment info
-    st.markdown(f"**Last Updated:** {datetime.fromisoformat(current_deployment['last_updated']).strftime('%d %b %Y, %H:%M')}")
-    
-    # Organize assignments by vehicle
-    vehicles = {}
-    for assignment in assignments:
-        vehicle = assignment['vehicle_code']
-        if vehicle not in vehicles:
-            vehicles[vehicle] = []
-        vehicles[vehicle].append(assignment)
-    
-    # Display assignments in a clean format
-    cols = st.columns(5)
-    
-    vehicle_columns = {
-        'PL181': cols[0],
-        'LF181E': cols[1],
-        'CPL181E': cols[2],
-        'A181D': cols[3],
-        'A182D': cols[4]
-    }
-    
-    for vehicle_code, column in vehicle_columns.items():
-        with column:
-            st.markdown(f'<div class="column-header">{vehicle_code}</div>', unsafe_allow_html=True)
-            
-            if vehicle_code in vehicles:
-                # Sort by position code to ensure proper order
-                sorted_assignments = sorted(
-                    vehicles[vehicle_code], 
-                    key=lambda x: order_position(x['position_code'])
-                )
-                
-                for assignment in sorted_assignments:
-                    position = assignment['position_code']
-                    name = assignment['personnel_name']
-                    
-                    # Display position and name
-                    st.markdown(
-                        f'<div class="position-row">'
-                        f'<div class="position-label">{position}</div>'
-                        f'<div class="personnel-name">{name}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-            else:
-                st.markdown("No assignments")
 
 # Helper function to order positions consistently
 def order_position(position):
@@ -456,6 +302,54 @@ def order_position(position):
     }
     return order.get(position, 99)
 
+# Home page with summary view
+def home_page():
+    st.markdown('<div class="main-header">SCDF TURNOUT DEPLOYMENT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Summary View</div>', unsafe_allow_html=True)
+    
+    # Navigation
+    navigation()
+    
+    if not st.session_state.positions:
+        st.markdown(
+            '<div class="notification error">No deployment data found. Create a new deployment using the Edit button.</div>',
+            unsafe_allow_html=True
+        )
+        return
+    
+    # Display positions in a clean format
+    cols = st.columns(5)
+    
+    vehicle_columns = {
+        'PL181': cols[0],
+        'LF181E': cols[1],
+        'CPL181E': cols[2],
+        'A181D': cols[3],
+        'A182D': cols[4]
+    }
+    
+    for vehicle_code, column in vehicle_columns.items():
+        with column:
+            st.markdown(f'<div class="column-header">{vehicle_code}</div>', unsafe_allow_html=True)
+            
+            if vehicle_code in st.session_state.positions and st.session_state.positions[vehicle_code]:
+                # Get all positions for this vehicle
+                positions = get_positions_for_vehicle(vehicle_code)
+                
+                # Display all positions with values
+                for position in positions:
+                    name = get_position_value(vehicle_code, position)
+                    if name:  # Only show filled positions
+                        st.markdown(
+                            f'<div class="position-row">'
+                            f'<div class="position-label">{position}</div>'
+                            f'<div class="personnel-name">{name}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+            else:
+                st.markdown("No assignments")
+
 # Edit page with deployment form
 def edit_page():
     st.markdown('<div class="main-header">TURNOUT DEPLOYMENT</div>', unsafe_allow_html=True)
@@ -463,6 +357,10 @@ def edit_page():
     
     # Navigation
     navigation()
+    
+    # Status bar for changes
+    if st.session_state.is_changed:
+        st.warning("You have unsaved changes.")
     
     # Create columns for each vehicle type
     cols = st.columns(5)
@@ -477,9 +375,11 @@ def edit_page():
             "ROTA COMMANDER Rota ?",
             options=sample_names,
             key="PL181_RC",
+            index=sample_names.index(get_position_value('PL181', 'RC')) if get_position_value('PL181', 'RC') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'RC'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['RC'] = rc_name
         
         # DRC
         st.markdown('<div class="role-label">DRC</div>', unsafe_allow_html=True)
@@ -487,9 +387,11 @@ def edit_page():
             "DEPUTY ROTA COMMANDER Rota ?",
             options=sample_names,
             key="PL181_DRC",
+            index=sample_names.index(get_position_value('PL181', 'DRC')) if get_position_value('PL181', 'DRC') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'DRC'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['DRC'] = drc_name
         
         # PO
         st.markdown('<div class="role-label">PO</div>', unsafe_allow_html=True)
@@ -497,9 +399,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="PL181_PO",
+            index=sample_names.index(get_position_value('PL181', 'PO')) if get_position_value('PL181', 'PO') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'PO'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['PO'] = po_name
         
         # SC
         st.markdown('<div class="role-label">SC</div>', unsafe_allow_html=True)
@@ -507,9 +411,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="PL181_SC",
+            index=sample_names.index(get_position_value('PL181', 'SC')) if get_position_value('PL181', 'SC') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'SC'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['SC'] = sc_name
         
         # FF1
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -517,9 +423,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="PL181_FF1",
+            index=sample_names.index(get_position_value('PL181', 'FF1')) if get_position_value('PL181', 'FF1') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'FF1'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['FF1'] = ff1_name
         
         # FF2
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -527,9 +435,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="PL181_FF2",
+            index=sample_names.index(get_position_value('PL181', 'FF2')) if get_position_value('PL181', 'FF2') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'FF2'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['FF2'] = ff2_name
         
         # FF3
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -537,9 +447,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="PL181_FF3",
+            index=sample_names.index(get_position_value('PL181', 'FF3')) if get_position_value('PL181', 'FF3') in sample_names else 0,
+            on_change=on_select_change,
+            args=('PL181', 'FF3'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['PL181']['FF3'] = ff3_name
 
     # LF181E
     with cols[1]:
@@ -551,9 +463,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="LF181E_PO",
+            index=sample_names.index(get_position_value('LF181E', 'PO')) if get_position_value('LF181E', 'PO') in sample_names else 0,
+            on_change=on_select_change,
+            args=('LF181E', 'PO'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['LF181E']['PO'] = po_name
         
         # SC
         st.markdown('<div class="role-label">SC</div>', unsafe_allow_html=True)
@@ -561,9 +475,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="LF181E_SC",
+            index=sample_names.index(get_position_value('LF181E', 'SC')) if get_position_value('LF181E', 'SC') in sample_names else 0,
+            on_change=on_select_change,
+            args=('LF181E', 'SC'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['LF181E']['SC'] = sc_name
         
         # FF1
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -571,9 +487,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="LF181E_FF1",
+            index=sample_names.index(get_position_value('LF181E', 'FF1')) if get_position_value('LF181E', 'FF1') in sample_names else 0,
+            on_change=on_select_change,
+            args=('LF181E', 'FF1'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['LF181E']['FF1'] = ff1_name
         
         # FF2
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -581,9 +499,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="LF181E_FF2",
+            index=sample_names.index(get_position_value('LF181E', 'FF2')) if get_position_value('LF181E', 'FF2') in sample_names else 0,
+            on_change=on_select_change,
+            args=('LF181E', 'FF2'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['LF181E']['FF2'] = ff2_name
 
     # CPL181E
     with cols[2]:
@@ -595,9 +515,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="CPL181E_PO",
+            index=sample_names.index(get_position_value('CPL181E', 'PO')) if get_position_value('CPL181E', 'PO') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'PO'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['PO'] = po_name
         
         # SC
         st.markdown('<div class="role-label">SC</div>', unsafe_allow_html=True)
@@ -605,9 +527,11 @@ def edit_page():
             "SECTION COMMANDER Rota ?",
             options=sample_names,
             key="CPL181E_SC",
+            index=sample_names.index(get_position_value('CPL181E', 'SC')) if get_position_value('CPL181E', 'SC') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'SC'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['SC'] = sc_name
         
         # FF1
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -615,9 +539,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="CPL181E_FF1",
+            index=sample_names.index(get_position_value('CPL181E', 'FF1')) if get_position_value('CPL181E', 'FF1') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'FF1'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['FF1'] = ff1_name
         
         # FF2
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -625,9 +551,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="CPL181E_FF2",
+            index=sample_names.index(get_position_value('CPL181E', 'FF2')) if get_position_value('CPL181E', 'FF2') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'FF2'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['FF2'] = ff2_name
         
         # FF3
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -635,9 +563,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="CPL181E_FF3",
+            index=sample_names.index(get_position_value('CPL181E', 'FF3')) if get_position_value('CPL181E', 'FF3') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'FF3'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['FF3'] = ff3_name
         
         # FF4
         st.markdown('<div class="role-label">FF</div>', unsafe_allow_html=True)
@@ -645,9 +575,11 @@ def edit_page():
             "FIREFIGHTER Rota ?",
             options=sample_names,
             key="CPL181E_FF4",
+            index=sample_names.index(get_position_value('CPL181E', 'FF4')) if get_position_value('CPL181E', 'FF4') in sample_names else 0,
+            on_change=on_select_change,
+            args=('CPL181E', 'FF4'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['CPL181E']['FF4'] = ff4_name
 
     # A181D
     with cols[3]:
@@ -659,9 +591,11 @@ def edit_page():
             "PARAMEDIC",
             options=sample_names,
             key="A181D_PRM",
+            index=sample_names.index(get_position_value('A181D', 'PRM')) if get_position_value('A181D', 'PRM') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A181D', 'PRM'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A181D']['PRM'] = prm_name
         
         # EMTD
         st.markdown('<div class="role-label">EMT (DRIVER)</div>', unsafe_allow_html=True)
@@ -669,9 +603,11 @@ def edit_page():
             "DRIVER",
             options=sample_names,
             key="A181D_EMTD",
+            index=sample_names.index(get_position_value('A181D', 'EMTD')) if get_position_value('A181D', 'EMTD') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A181D', 'EMTD'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A181D']['EMTD'] = emtd_name
         
         # EMT1
         st.markdown('<div class="role-label">EMT</div>', unsafe_allow_html=True)
@@ -679,9 +615,11 @@ def edit_page():
             "EMT",
             options=sample_names,
             key="A181D_EMT1",
+            index=sample_names.index(get_position_value('A181D', 'EMT1')) if get_position_value('A181D', 'EMT1') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A181D', 'EMT1'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A181D']['EMT1'] = emt1_name
         
         # EMT2
         st.markdown('<div class="role-label">EMT</div>', unsafe_allow_html=True)
@@ -689,9 +627,11 @@ def edit_page():
             "EMT",
             options=sample_names,
             key="A181D_EMT2",
+            index=sample_names.index(get_position_value('A181D', 'EMT2')) if get_position_value('A181D', 'EMT2') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A181D', 'EMT2'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A181D']['EMT2'] = emt2_name
 
     # A182D
     with cols[4]:
@@ -703,9 +643,11 @@ def edit_page():
             "PARAMEDIC",
             options=sample_names,
             key="A182D_PRM",
+            index=sample_names.index(get_position_value('A182D', 'PRM')) if get_position_value('A182D', 'PRM') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A182D', 'PRM'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A182D']['PRM'] = prm_name
         
         # EMTD
         st.markdown('<div class="role-label">EMT (DRIVER)</div>', unsafe_allow_html=True)
@@ -713,9 +655,11 @@ def edit_page():
             "DRIVER",
             options=sample_names,
             key="A182D_EMTD",
+            index=sample_names.index(get_position_value('A182D', 'EMTD')) if get_position_value('A182D', 'EMTD') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A182D', 'EMTD'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A182D']['EMTD'] = emtd_name
         
         # EMT1
         st.markdown('<div class="role-label">EMT</div>', unsafe_allow_html=True)
@@ -723,9 +667,11 @@ def edit_page():
             "EMT",
             options=sample_names,
             key="A182D_EMT1",
+            index=sample_names.index(get_position_value('A182D', 'EMT1')) if get_position_value('A182D', 'EMT1') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A182D', 'EMT1'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A182D']['EMT1'] = emt1_name
         
         # EMT2
         st.markdown('<div class="role-label">EMT</div>', unsafe_allow_html=True)
@@ -733,9 +679,11 @@ def edit_page():
             "EMT",
             options=sample_names,
             key="A182D_EMT2",
+            index=sample_names.index(get_position_value('A182D', 'EMT2')) if get_position_value('A182D', 'EMT2') in sample_names else 0,
+            on_change=on_select_change,
+            args=('A182D', 'EMT2'),
             label_visibility="collapsed"
         )
-        st.session_state.deployment['A182D']['EMT2'] = emt2_name
 
     # Footer with action buttons
     st.markdown('<div class="footer-buttons"></div>', unsafe_allow_html=True)
@@ -744,9 +692,16 @@ def edit_page():
     # Save button
     with cols_btn[0]:
         if st.button("Save Deployment"):
-            success = save_deployment_to_supabase()
+            success = True
+            # Save each changed position individually
+            for vehicle in st.session_state.positions:
+                for position, name in st.session_state.positions[vehicle].items():
+                    if update_position(vehicle, position, name) == False:
+                        success = False
+            
             if success:
                 st.success("Deployment updated successfully!")
+                st.session_state.is_changed = False
                 # Switch to home page after saving
                 st.session_state.page = 'home'
                 st.rerun()
@@ -759,15 +714,15 @@ def edit_page():
     # Export button
     with cols_btn[2]:
         if st.button("Export CSV"):
-            # Convert the deployment data to a format suitable for CSV
+            # Convert the positions data to a format suitable for CSV
             csv_data = []
-            for vehicle, roles in st.session_state.deployment.items():
-                for role, name in roles.items():
+            for vehicle in st.session_state.positions:
+                for position, name in st.session_state.positions[vehicle].items():
                     if name:  # Only include filled positions
                         csv_data.append({
                             'Vehicle': vehicle,
-                            'Position': role,
-                            'Role_Description': role_descriptions.get(role, ''),
+                            'Position': position,
+                            'Role_Description': role_descriptions.get(position, ''),
                             'Name': name
                         })
             
@@ -785,11 +740,6 @@ def edit_page():
 
 # Main app logic - Load current deployment data on startup
 def main():
-    # Load current deployment when app starts
-    if 'initial_load' not in st.session_state:
-        load_deployment_from_supabase()
-        st.session_state.initial_load = True
-        
     if st.session_state.page == 'home':
         home_page()
     elif st.session_state.page == 'edit':
