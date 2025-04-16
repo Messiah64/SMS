@@ -5,6 +5,7 @@ from io import BytesIO
 from supabase import create_client
 import uuid
 from datetime import datetime
+import time
 
 # Set page configuration
 st.set_page_config(
@@ -51,7 +52,7 @@ def load_positions():
         st.error(f"Error loading data: {e}")
         return {}
 
-# Simple function to save a single position
+# Simple function to update a single position
 def update_position(vehicle, position, name):
     """Update a single position in the database"""
     supabase = init_supabase()
@@ -102,12 +103,53 @@ def update_position(vehicle, position, name):
 if 'page' not in st.session_state:
     st.session_state.page = 'home'  # Default to home page
 
-if 'positions' not in st.session_state:
-    # Load positions from database on first load
-    st.session_state.positions = load_positions()
-
 if 'is_changed' not in st.session_state:
     st.session_state.is_changed = False
+
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = datetime.now()
+
+# Force refresh positions in summary view
+if st.session_state.page == 'home':
+    # Always get fresh data in summary view
+    st.session_state.positions = load_positions()
+else:
+    # Initialize positions if not already done
+    if 'positions' not in st.session_state:
+        st.session_state.positions = load_positions()
+
+# Auto-refresh settings for summary view
+def auto_refresh_settings():
+    col1, col2 = st.columns([4, 1])
+    
+    with col2:
+        # Default refresh interval in seconds (5 seconds)
+        refresh_interval = st.selectbox(
+            "Auto-refresh interval",
+            options=[3, 5, 10, 15, 30, 60],
+            index=1,  # Default to 5 seconds
+            key="refresh_interval"
+        )
+    
+    # Show auto-refresh notification
+    with col1:
+        current_time = datetime.now().strftime("%H:%M:%S")
+        st.markdown(
+            f"""
+            <div style="text-align: right; margin-bottom: 10px;">
+                <span style="background-color: #28a745; color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.8em;">
+                    Auto-Refresh: {refresh_interval}s
+                </span>
+                <span style="margin-left: 10px; color: gray; font-size: 0.8em;">
+                    Last updated: {current_time}
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    # Return the refresh interval for use in the auto-refresh logic
+    return refresh_interval
 
 # Custom CSS
 st.markdown("""
@@ -304,51 +346,85 @@ def order_position(position):
 
 # Home page with summary view
 def home_page():
-    st.markdown('<div class="main-header">SCDF TURNOUT DEPLOYMENT</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Summary View</div>', unsafe_allow_html=True)
+    # Add a placeholder at the very top
+    refresh_placeholder = st.empty()
     
-    # Navigation
-    navigation()
-    
-    if not st.session_state.positions:
-        st.markdown(
-            '<div class="notification error">No deployment data found. Create a new deployment using the Edit button.</div>',
-            unsafe_allow_html=True
-        )
-        return
-    
-    # Display positions in a clean format
-    cols = st.columns(5)
-    
-    vehicle_columns = {
-        'PL181': cols[0],
-        'LF181E': cols[1],
-        'CPL181E': cols[2],
-        'A181D': cols[3],
-        'A182D': cols[4]
-    }
-    
-    for vehicle_code, column in vehicle_columns.items():
-        with column:
-            st.markdown(f'<div class="column-header">{vehicle_code}</div>', unsafe_allow_html=True)
-            
-            if vehicle_code in st.session_state.positions and st.session_state.positions[vehicle_code]:
-                # Get all positions for this vehicle
-                positions = get_positions_for_vehicle(vehicle_code)
+    with refresh_placeholder.container():
+        st.markdown('<div class="main-header">SCDF TURNOUT DEPLOYMENT</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Summary View</div>', unsafe_allow_html=True)
+        
+        # Add auto-refresh to summary view and get the interval
+        refresh_interval = auto_refresh_settings()
+        
+        # Navigation
+        navigation()
+        
+        if not st.session_state.positions:
+            st.markdown(
+                '<div class="notification error">No deployment data found. Create a new deployment using the Edit button.</div>',
+                unsafe_allow_html=True
+            )
+            return
+        
+        # Display positions in a clean format
+        cols = st.columns(5)
+        
+        vehicle_columns = {
+            'PL181': cols[0],
+            'LF181E': cols[1],
+            'CPL181E': cols[2],
+            'A181D': cols[3],
+            'A182D': cols[4]
+        }
+        
+        for vehicle_code, column in vehicle_columns.items():
+            with column:
+                st.markdown(f'<div class="column-header">{vehicle_code}</div>', unsafe_allow_html=True)
                 
-                # Display all positions with values
-                for position in positions:
-                    name = get_position_value(vehicle_code, position)
-                    if name:  # Only show filled positions
+                if vehicle_code in st.session_state.positions and st.session_state.positions[vehicle_code]:
+                    # Get all positions for this vehicle
+                    positions = get_positions_for_vehicle(vehicle_code)
+                    
+                    # Only show filled positions, sorted by order
+                    position_data = []
+                    for position in positions:
+                        name = get_position_value(vehicle_code, position)
+                        if name:  # Only include filled positions
+                            position_data.append({"position": position, "name": name, "order": order_position(position)})
+                    
+                    # Sort by position order
+                    position_data.sort(key=lambda x: x["order"])
+                    
+                    # Display all positions with values
+                    for item in position_data:
                         st.markdown(
                             f'<div class="position-row">'
-                            f'<div class="position-label">{position}</div>'
-                            f'<div class="personnel-name">{name}</div>'
+                            f'<div class="position-label">{item["position"]}</div>'
+                            f'<div class="personnel-name">{item["name"]}</div>'
                             f'</div>',
                             unsafe_allow_html=True
                         )
-            else:
-                st.markdown("No assignments")
+                else:
+                    st.markdown("No assignments")
+    
+    # Auto-refresh logic - wait for the selected interval and then rerun the app
+    if not st.button("Stop Auto-Refresh", key="stop_refresh"):
+        # Calculate time since last refresh
+        now = datetime.now()
+        elapsed = (now - st.session_state.last_refresh).total_seconds()
+        
+        # If it's time to refresh, update the timestamp and rerun
+        if elapsed >= refresh_interval:
+            st.session_state.last_refresh = now
+            st.rerun()
+        
+        # Otherwise, display a countdown and wait
+        time_left = max(0, refresh_interval - elapsed)
+        st.markdown(f"Refreshing in {int(time_left)} seconds...")
+        time.sleep(min(1, time_left))  # Sleep for at most 1 second to allow interaction
+        st.rerun()  # Rerun to update the countdown
+    else:
+        st.success("Auto-refresh stopped. Click 'Summary View' to restart.")
 
 # Edit page with deployment form
 def edit_page():
@@ -738,7 +814,7 @@ def edit_page():
             else:
                 st.warning("No deployment data to export!")
 
-# Main app logic - Load current deployment data on startup
+# Main app logic
 def main():
     if st.session_state.page == 'home':
         home_page()
